@@ -1,0 +1,321 @@
+{% extends 'base.html' %} 
+{% block content %}
+<h1>Socket.IO Client</h1>
+<p>Status: <span id="status">Disconnected</span></p>
+
+<!-- Two side-by-side tables -->
+<div class="top-tables-container">
+    <!-- Table 1 (Expiry Table & Expiry submit button) -->
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <form id="expiry-form" method="post" onsubmit="return sendExpiry();">
+                    <label><input type="radio" name="expiry" value="near" checked> Near </label>
+                    <label><input type="radio" name="expiry" value="mid"> Mid </label>
+                    <label><input type="radio" name="expiry" value="far"> Far </label>
+
+                    <br>
+                    <label for="open-factor">Open Factor:</label>
+                    <input type="number" id="open-factor" name="open-factor" step="0.01" required>
+
+                    <button type="button" onclick="sendExpiry()">Submit Expiry</button>
+                </form>
+
+                <tr>
+                    <th colspan="4">Dates & Days Left to Expiry</th>
+                </tr>
+                <tr>
+                    <th>Today</th>
+                    <th>Near Expiry</th>
+                    <th>Mid Expiry</th>
+                    <th>Far Expiry</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <!-- Dynamically render dates using Jinja -->
+                    <td>{{today}}</td>
+                    <td id="near-expiry">{{near_expiry}}</td>
+                    <td id="mid-expiry">{{mid_expiry}}</td>
+                    <td id="far-expiry">{{far_expiry}}</td>
+                </tr>
+                <tr>
+                    <td>0</td>
+                    <td>{{days_left_near}}</td>
+                    <td>{{days_left_mid}}</td>
+                    <td>{{days_left_far}}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    
+    <!-- Table 2 (Expenses Table) -->
+    <div class="table-wrapper">
+        <table>
+            <thead>
+                <tr>
+                    <th colspan="6">Expense</th>
+                </tr>
+                <tr>
+                    <th>Future Buy</th>
+                    <th>Future Sell</th>
+                    <th>Cash Buy</th>
+                    <th>Cash Sell</th>
+                    <th>Cash Dlv Buy</th>
+                    <th>Cash Dlv Sell</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td id="future-buy">500</td>
+                    <td id="future-sell">2600</td>
+                    <td id="cash-buy">800</td>
+                    <td id="cash-sell">4000</td>
+                    <td id="cash-dlv-buy">12000</td>
+                    <td id="cash-dlv-sell">11500</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Main Data Table -->
+<div id="data">
+    <h2>Received Data:</h2>
+    <div class="controls">
+        <button id="toggleColumnsBtn" onclick="toggleBidAskColumns()">Show Bid and Ask</button>
+        <button id="resetSortBtn" onclick="resetSort()">Reset Sort</button>
+        <input type="text" id="searchInput" placeholder="Search by SYMBOL..." onkeyup="filterTable()" style="float: right; margin-bottom: 10px; padding: 5px;">
+    </div>
+    <table id="data-table">
+        <thead>
+            <tr id="table-header"></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</div>
+
+<script type="text/javascript">
+    const statusElement = document.getElementById('status');
+    const tableHeader = document.getElementById('table-header');
+    const tableBody = document.querySelector('#data-table tbody');
+    const toggleButton = document.getElementById('toggleColumnsBtn');
+    const defaultOpenFactor = 1.0;
+    
+    let columnsVisible = false;
+    let sortDirection = {};
+    let currentSortColumn = null;
+    let frozenSort = false;
+    let frozenSearchValue = '';
+    let lastReceivedData;
+
+
+    var socketio = io();
+
+    socketio.on('connect', function() {
+        console.log('WebSocket connection established');
+        statusElement.textContent = 'Connected';
+        statusElement.className = 'success';
+    });
+
+    socketio.on('disconnect', function() {
+        console.log('WebSocket connection lost');
+        statusElement.textContent = 'Disconnected';
+        statusElement.className = 'error';
+    });
+
+    socketio.on('connect_error', function(error) {
+        console.error('WebSocket connection error: ' + error.message);
+        statusElement.textContent = 'Connection Error';
+        statusElement.className = 'error';
+    });
+
+    socketio.on('data', function(event) {
+        console.log('Received data: ', event);
+        displayTableData(event);
+    });
+
+    document.getElementById('expiry-form').addEventListener('submit', function(event) {
+        event.preventDefault();
+        sendExpiry();
+    });
+
+    function sendExpiry() {
+        const form = document.getElementById('expiry-form');
+        const selectedExpiry = form.elements['expiry'].value;
+        let openFactor = form.elements['open-factor'].value;
+        
+        if (!openFactor || isNaN(openFactor)) 
+        {
+            openFactor = defaultOpenFactor;
+            form.elements['open-factor'].value = defaultOpenFactor; // Display default in the field
+        }
+        // {
+        // alert('Please enter a valid Open Factor.');
+        // return false;
+        // }
+        const nearExpiry = document.getElementById('near-expiry').textContent;
+        const midExpiry = document.getElementById('mid-expiry').textContent;
+        const farExpiry = document.getElementById('far-expiry').textContent;
+
+        socketio.emit('message', { expiry: selectedExpiry,
+              openFactor: parseFloat(openFactor), 
+              near_expiry: nearExpiry, 
+              mid_expiry: midExpiry, 
+              far_expiry: farExpiry});
+
+          return true;    
+    }
+
+    // Keep your existing socket connection code
+    var socketio = io();
+
+    socketio.on('data', function(event) {
+        console.log('Received data: ', event);
+        displayTableData(event);
+    });
+
+    function displayTableData(data) {
+        lastReceivedData = data;
+        const tableBody = document.querySelector('#data-table tbody');
+        const tableHeader = document.getElementById('table-header');
+        tableBody.innerHTML = '';
+       
+        if(Array.isArray(data) && data.length>0) {
+            const headers = Object.keys(data[0]);
+            tableHeader.innerHTML = '';
+
+            headers.forEach(header => {
+                const th = document.createElement('th');
+                th.textContent = header;
+
+                if (header.includes('BID') || header.includes('ASK')) {
+                    th.classList.add('bid-ask');
+                    if (columnsVisible) {
+                        th.style.display = 'table-cell';
+                    } else {
+                        th.style.display = 'none';
+                    }
+                }
+
+                if (['DLV_OPEN', 'RLT_RETURN_OPEN'].includes(header)) {
+                    th.style.cursor = 'pointer';
+                    th.setAttribute('data-column', header);
+                    th.addEventListener('click', () => {
+                        frozenSort = true;
+                        sortTable(header);
+                    });
+                    if (currentSortColumn === header) {
+                        th.classList.add('active-sort');
+                        th.setAttribute('data-sort', sortDirection[header]);
+                    }
+                }
+            
+                tableHeader.appendChild(th);
+            });
+
+            // Apply existing sort if active
+            if (currentSortColumn && frozenSort) {
+                data.sort((a, b) => {
+                    const valueA = parseFloat(a[currentSortColumn]) || 0;
+                    const valueB = parseFloat(b[currentSortColumn]) || 0;
+                    return sortDirection[currentSortColumn] === 'asc' ? valueA - valueB : valueB - valueA;
+                });
+            }
+
+            data.forEach(item => {
+                const row = document.createElement('tr');
+                headers.forEach(header => {
+                    const td = document.createElement('td');
+                    td.textContent = typeof item[header] === 'object' ? JSON.stringify(item[header]) : item[header];
+                
+                    if (header.includes('BID') || header.includes('ASK')) {
+                        td.classList.add('bid-ask');
+                        td.style.display = columnsVisible ? 'table-cell' : 'none';
+                    }
+                
+                    row.appendChild(td);
+                });
+                tableBody.appendChild(row);
+            });
+        }
+    }    function toggleBidAskColumns() {
+        const bidAskElements = document.querySelectorAll('.bid-ask');
+        columnsVisible = !columnsVisible;
+        
+        bidAskElements.forEach(element => {
+            element.style.display = columnsVisible ? 'table-cell' : 'none';
+        });
+        toggleButton.textContent = columnsVisible ? 'Hide Bid and Ask' : 'Show Bid and Ask';
+        
+        // Re-display data with current visibility state
+        if (lastReceivedData) {
+            displayTableData(lastReceivedData);
+        }
+    }
+
+    function sortTable(column) {
+        const table = document.getElementById('data-table');
+        const tbody = table.querySelector('tbody');
+        const th = Array.from(table.querySelectorAll('th')).find(th => th.getAttribute('data-column') === column);
+        
+        // Update sort direction
+        if (currentSortColumn !== column) {
+            sortDirection[column] = 'asc';
+            currentSortColumn = column;
+        } else {
+            sortDirection[column] = sortDirection[column] === 'asc' ? 'desc' : 'asc';
+        }
+
+        // Update visual indicators
+        table.querySelectorAll('th').forEach(header => {
+            header.classList.remove('active-sort');
+            header.removeAttribute('data-sort');
+        });
+        th.classList.add('active-sort');
+        th.setAttribute('data-sort', sortDirection[column]);
+
+        const rows = Array.from(tbody.rows);
+        const columnIndex = Array.from(table.querySelectorAll('th')).findIndex(th => th.getAttribute('data-column') === column);
+
+        rows.sort((a, b) => {
+            const valueA = parseFloat(a.cells[columnIndex].textContent) || 0;
+            const valueB = parseFloat(b.cells[columnIndex].textContent) || 0;
+            return sortDirection[column] === 'asc' ? valueA - valueB : valueB - valueA;
+        });
+
+        tbody.innerHTML = '';
+        rows.forEach(row => tbody.appendChild(row));
+    }
+
+    function resetSort() {
+        const table = document.getElementById('data-table');
+        table.querySelectorAll('th').forEach(header => {
+            header.classList.remove('active-sort');
+            header.removeAttribute('data-sort');
+        });
+        frozenSort = false;
+        frozenSearchValue = '';
+        currentSortColumn = null;
+        displayTableData(lastReceivedData);
+    }
+
+    function filterTable() {
+        frozenSearchValue = document.getElementById("searchInput").value.toUpperCase();
+        const tr = tableBody.getElementsByTagName("tr");
+
+        for (let i = 0; i < tr.length; i++) {
+            const td = tr[i].getElementsByTagName("td")[1];
+            if (td) {
+                const symbol = td.textContent || td.innerText;
+                tr[i].style.display = symbol.toUpperCase().indexOf(frozenSearchValue) > -1 ? "" : "none";
+            }
+        }
+    }
+
+    setInterval(function() {
+        sendExpiry();
+    }, 500);
+</script>
+
+{% endblock %}
